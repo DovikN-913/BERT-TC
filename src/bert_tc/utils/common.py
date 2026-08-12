@@ -56,6 +56,7 @@ def save_csv(rows: list[dict], path: str | Path) -> None:
     if not rows:
         return
 
+    # newline=""：避免 Windows 下 DictWriter 多空行
     with output_path.open("w", encoding="utf-8-sig", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=list(rows[0].keys()))
         writer.writeheader()

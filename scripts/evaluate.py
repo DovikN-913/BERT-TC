@@ -25,6 +25,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+# 评估逻辑在 train.py 里，避免两套实现不一致
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 

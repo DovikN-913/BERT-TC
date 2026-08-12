@@ -37,16 +37,19 @@ class TextClassifierPredictor:
         """
         self.config = config
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # 命令行传入优先，否则用配置里的默认 checkpoint 名
         checkpoint = checkpoint_name or config.serving.checkpoint_name
         self.checkpoint_dir = config.paths.checkpoints_dir / checkpoint
         if not self.checkpoint_dir.exists():
             raise FileNotFoundError(f"未找到可用模型目录: {self.checkpoint_dir}")
 
+        # 从同一目录加载分词器与模型，保证与训练时词表 / 特殊符号一致
         self.tokenizer = AutoTokenizer.from_pretrained(str(self.checkpoint_dir))
         self.model = AutoModelForSequenceClassification.from_pretrained(str(self.checkpoint_dir))
         self.model.to(self.device)
-        self.model.eval()
+        self.model.eval()  # 推理关闭 dropout
 
+        # config.id2label 的 key 可能是 str，统一成 int 便于索引
         self.id2label = {
             int(label_id): label_name
             for label_id, label_name in self.model.config.id2label.items()
@@ -66,16 +69,18 @@ class TextClassifierPredictor:
         encoded = self.tokenizer(
             clean_text,
             truncation=True,
-            max_length=self.config.data.max_length,
-            return_tensors="pt",
+            max_length=self.config.data.max_length,  # 与训练截断长度保持一致
+            return_tensors="pt",  # 直接得到 batch 维=1 的张量
         )
         encoded = {key: value.to(self.device) for key, value in encoded.items()}
 
         with torch.no_grad():
-            logits = self.model(**encoded).logits
+            logits = self.model(**encoded).logits  # [1, num_labels]
+            # softmax 把 logits 转成各类概率；squeeze(0) 去掉 batch 维
             probabilities = torch.softmax(logits, dim=-1).squeeze(0)
             predicted_id = int(torch.argmax(probabilities).item())
 
+        # 组装「类别名 -> 概率」字典，方便前端 / CLI 直接展示
         probability_map = {
             self.id2label[index]: round(float(score), 6)
             for index, score in enumerate(probabilities.detach().cpu().tolist())
@@ -110,4 +115,5 @@ if __name__ == "__main__":
     args = parse_args()
     predictor = load_predictor(checkpoint_name=args.checkpoint)
     result = predictor.predict(args.text)
+    # ensure_ascii=False：中文标签按原文打印，不被转成 \uXXXX
     print(json.dumps(result, ensure_ascii=False, indent=2))

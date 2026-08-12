@@ -17,6 +17,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
+# 保证能 import 到 src/bert_tc
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
@@ -36,9 +37,11 @@ def get_label_names(dataset, label_column: str) -> list[str]:
     若不存在（纯整型标签），则按训练集中出现过的标签排序后转成字符串。
     """
     label_feature = dataset["train"].features[label_column]
+    # ClassLabel 会自带 names，例如 ["negative", "positive"]
     if hasattr(label_feature, "names"):
         return list(label_feature.names)
 
+    # 纯 int 标签：排序后转字符串，保证顺序稳定（0,1,2...）
     unique_labels = sorted(set(dataset["train"][label_column]))
     return [str(label) for label in unique_labels]
 
@@ -50,8 +53,10 @@ def build_split_summary(split_dataset, text_column: str) -> dict[str, Any]:
     p95_text_length：约 95% 样本的文本长度不超过该值。
     """
     texts = split_dataset[text_column]
+    # 这里用字符数近似文本长度（中文场景够用）；不是 tokenizer token 数
     lengths = [len(text.strip()) for text in texts]
     sorted_lengths = sorted(lengths)
+    # 近似 95 分位下标；空集时至少落到 0，避免 IndexError
     p95_index = int(len(sorted_lengths) * 0.95) - 1
     p95_index = max(p95_index, 0)
 
@@ -71,12 +76,13 @@ def prepare_dataset_artifacts(config: AppConfig) -> dict:
     训练脚本也会调用本函数，确保标签映射与最新数据一致。
     """
     dataset = load_from_disk(str(config.paths.raw_data_dir))
+    # 产物按数据集名分子目录，换数据集时不会互相覆盖
     output_dir = ensure_dir(config.paths.processed_dir / config.data.dataset_name)
 
-    # 构建双向标签映射：名称 <-> 整数 id
+    # 双向映射：训练用 label2id，推理展示用 id2label
     label_names = get_label_names(dataset, config.data.label_column)
     label2id = {label_name: index for index, label_name in enumerate(label_names)}
-    # JSON 键必须是字符串，因此 id2label 的 key 使用 str(index)
+    # JSON 对象的 key 只能是字符串，所以 id 侧写成 "0"/"1"/...
     id2label = {str(index): label_name for label_name, index in label2id.items()}
 
     # 对各 split（train / validation / test）分别做长度统计
@@ -91,12 +97,12 @@ def prepare_dataset_artifacts(config: AppConfig) -> dict:
         "dataset_name": config.data.dataset_name,
         "text_column": config.data.text_column,
         "label_column": config.data.label_column,
-        "num_labels": len(label_names),
+        "num_labels": len(label_names),  # 二分类=2，多分类=N；训练时直接喂给模型
         "label_names": label_names,
         "label2id": label2id,
         "id2label": id2label,
         "splits": split_summary,
-        # 附带一条训练集样例，方便人工快速确认数据格式
+        # 附带一条训练集样例，方便人工快速确认「字段名 / 标签含义」是否对得上
         "sample": {
             "text": dataset["train"][0][config.data.text_column],
             "label": int(dataset["train"][0][config.data.label_column]),

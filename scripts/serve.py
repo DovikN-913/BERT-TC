@@ -23,6 +23,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+# 需要 import 同目录的 predict.py
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -40,7 +41,7 @@ from predict import load_predictor
 class PredictRequest(BaseModel):
     """预测请求体。"""
 
-    text: str = Field(..., description="待分类的中文文本")
+    text: str = Field(..., description="待分类的中文文本")  # ... 表示必填
 
 
 class PredictResponse(BaseModel):
@@ -62,12 +63,13 @@ def create_app(config_path: str = "configs/base.yaml") -> FastAPI:
     config = load_config(config_path)
     app = FastAPI(title="BERT 中文分类服务", version="1.0.0")
 
+    # 静态资源：浏览器通过 /static/styles.css、/static/app.js 访问
     static_dir = CONFIG_PROJECT_ROOT / "web" / "static"
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     @app.on_event("startup")
     def load_runtime_objects() -> None:
-        """服务启动时预加载模型。"""
+        """服务启动时预加载模型，避免每个请求都重新读盘。"""
         app.state.predictor = load_predictor(config_path=config_path)
 
     @app.get("/", response_class=FileResponse)
@@ -77,7 +79,7 @@ def create_app(config_path: str = "configs/base.yaml") -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        """健康检查。"""
+        """健康检查：确认进程已起来（不保证模型一定加载成功）。"""
         return {"status": "ok", "project": config.project_name}
 
     @app.post("/predict", response_model=PredictResponse)
@@ -91,8 +93,10 @@ def create_app(config_path: str = "configs/base.yaml") -> FastAPI:
         try:
             result = app.state.predictor.predict(request.text)
         except ValueError as exc:
+            # 客户端输入问题
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except FileNotFoundError as exc:
+            # 服务端缺模型文件
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         return PredictResponse(**result)
 

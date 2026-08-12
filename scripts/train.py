@@ -18,6 +18,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# 把项目根下的 src/ 与 scripts/ 加入模块搜索路径，
+# 这样未 pip install -e . 时也能 import bert_tc 与同目录的 prepare_data
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = PROJECT_ROOT / "src"
 SCRIPTS_DIR = Path(__file__).resolve().parent
@@ -32,10 +34,10 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import (
-    AutoModelForSequenceClassification,
+    AutoModelForSequenceClassification,  # 预训练编码器 + 分类头
     AutoTokenizer,
-    DataCollatorWithPadding,
-    get_linear_schedule_with_warmup,
+    DataCollatorWithPadding,             # 按 batch 内最长序列动态 padding
+    get_linear_schedule_with_warmup,     # warmup 后线性衰减学习率
 )
 
 from bert_tc.config import AppConfig, load_config
@@ -61,11 +63,14 @@ def load_tokenizer_and_model(
     - checkpoint_dir 为 None：从预训练目录初始化（开始训练）
     - checkpoint_dir 有值：从已保存 checkpoint 恢复（评估）
     """
+    # 训练用预训练权重；评估用微调后的 checkpoint
     model_source = checkpoint_dir if checkpoint_dir is not None else config.paths.pretrained_model_dir
     tokenizer = AutoTokenizer.from_pretrained(str(model_source))
     model = AutoModelForSequenceClassification.from_pretrained(
         str(model_source),
+        # num_labels 决定分类头输出维度；二分类=2，多分类=N
         num_labels=metadata["num_labels"],
+        # JSON 里 id 是字符串，这里转回 int，方便 transformers 写入 config
         id2label={int(key): value for key, value in metadata["id2label"].items()},
         label2id=metadata["label2id"],
     )
@@ -83,6 +88,7 @@ def tokenize_datasets(config: AppConfig, tokenizer):
     raw_dataset = load_from_disk(str(config.paths.raw_data_dir))
 
     def tokenize_function(batch: dict) -> dict:
+        # batched=True 时，这里拿到的是一批文本 list
         return tokenizer(
             batch[config.data.text_column],
             truncation=True,
@@ -91,13 +97,16 @@ def tokenize_datasets(config: AppConfig, tokenizer):
 
     tokenized_dataset = raw_dataset.map(
         tokenize_function,
-        batched=True,
+        batched=True,  # 批量分词比逐条快很多
         desc="对数据集进行分词编码",
     )
+    # transformers 分类模型约定标签字段名为 labels（不是 label）
     if config.data.label_column != "labels":
         tokenized_dataset = tokenized_dataset.rename_column(config.data.label_column, "labels")
 
+    # 训练只需要模型输入 + 标签；丢掉原始 text 等无关列，省内存
     keep_columns = ["input_ids", "attention_mask", "labels"]
+    # 部分 BERT 分词器还会产出 token_type_ids（句对任务用），有则一并保留
     if "token_type_ids" in tokenized_dataset["train"].column_names:
         keep_columns.append("token_type_ids")
 
@@ -107,25 +116,29 @@ def tokenize_datasets(config: AppConfig, tokenizer):
         if column_name not in keep_columns
     ]
     tokenized_dataset = tokenized_dataset.remove_columns(remove_columns)
+    # python 格式：交给 DataCollatorWithPadding 在组 batch 时再转成张量并动态 pad
     tokenized_dataset.set_format("python")
     return tokenized_dataset
 
 
 def build_dataloaders(config: AppConfig, tokenized_dataset, tokenizer):
     """构建 train / validation / test 三个 DataLoader。"""
+    # padding=True：每个 batch 只 pad 到该 batch 最长序列，比一律 pad 到 max_length 更省显存
     collator = DataCollatorWithPadding(tokenizer=tokenizer, padding=True)
+
     train_loader = DataLoader(
         tokenized_dataset["train"],
         batch_size=config.training.batch_size,
-        shuffle=True,
+        shuffle=True,  # 训练需要打乱，降低顺序偏差
         num_workers=config.training.num_workers,
+        # pin_memory：GPU 训练时可加快 Host -> Device 拷贝
         pin_memory=torch.cuda.is_available(),
         collate_fn=collator,
     )
     val_loader = DataLoader(
         tokenized_dataset["validation"],
         batch_size=config.training.eval_batch_size,
-        shuffle=False,
+        shuffle=False,  # 评估不打乱，结果可复现、便于对齐样本
         num_workers=config.training.num_workers,
         pin_memory=torch.cuda.is_available(),
         collate_fn=collator,
@@ -148,17 +161,20 @@ def move_batch_to_device(batch: dict, device: torch.device) -> dict:
 
 def evaluate_model(model, data_loader, device: torch.device, label_names: list[str]) -> dict:
     """在给定 DataLoader 上评估，返回指标字典（含平均 loss）。"""
-    model.eval()
+    model.eval()  # 关闭 dropout 等训练态行为
     total_loss = 0.0
     all_predictions: list[int] = []
     all_labels: list[int] = []
 
+    # 评估不需要反传，关掉梯度可省显存、加速
     with torch.no_grad():
         for batch in data_loader:
             batch = move_batch_to_device(batch, device)
             outputs = model(**batch)
             total_loss += outputs.loss.item()
+            # logits 形状 [batch, num_labels]，取最大分对应的类别 id
             predictions = outputs.logits.argmax(dim=-1)
+            # 收到 CPU list，方便后面交给 sklearn
             all_predictions.extend(predictions.detach().cpu().tolist())
             all_labels.extend(batch["labels"].detach().cpu().tolist())
 
@@ -167,6 +183,7 @@ def evaluate_model(model, data_loader, device: torch.device, label_names: list[s
         predictions=all_predictions,
         label_names=label_names,
     )
+    # 用 batch 数做平均；max(..., 1) 避免空 loader 除零
     metrics["loss"] = total_loss / max(len(data_loader), 1)
     return metrics
 
@@ -174,6 +191,7 @@ def evaluate_model(model, data_loader, device: torch.device, label_names: list[s
 def save_checkpoint(model, tokenizer, checkpoint_dir: Path, extra_metadata: dict) -> None:
     """以 HuggingFace 标准格式保存模型与分词器，并写入 metadata.json。"""
     ensure_dir(checkpoint_dir)
+    # save_pretrained 会写出 config.json、model.safetensors、tokenizer 文件等
     model.save_pretrained(str(checkpoint_dir))
     tokenizer.save_pretrained(str(checkpoint_dir))
     save_json(extra_metadata, checkpoint_dir / "metadata.json")
@@ -202,6 +220,7 @@ def evaluate_checkpoint(
 
     tokenizer, model = load_tokenizer_and_model(config, metadata, checkpoint_dir=checkpoint_dir)
     tokenized_dataset = tokenize_datasets(config, tokenizer)
+    # 这里用不到 train_loader，用 _ 占位
     _, val_loader, test_loader = build_dataloaders(config, tokenized_dataset, tokenizer)
 
     device = get_device()
@@ -216,7 +235,7 @@ def evaluate_checkpoint(
 
     output_name = "test_metrics.json" if split == "test" else "validation_metrics.json"
 
-    # 保存混淆矩阵热力图，便于直观查看分类对错分布
+    # 数值指标之外再存一张混淆矩阵图，方便肉眼看哪些类容易互相误判
     cm_name = "test_confusion_matrix.png" if split == "test" else "validation_confusion_matrix.png"
     cm_path = plot_confusion_matrix(
         matrix=metrics["confusion_matrix"],
@@ -235,13 +254,13 @@ def evaluate_checkpoint(
 def train(config_path: str = "configs/base.yaml") -> dict:
     """端到端训练主流程。"""
     config = load_config(config_path)
-    set_seed(config.seed)
+    set_seed(config.seed)  # 尽量保证实验可复现
 
     ensure_dir(config.paths.checkpoints_dir)
     ensure_dir(config.paths.reports_dir)
     ensure_dir(config.paths.logs_dir)
 
-    # 1) 准备标签映射等元数据
+    # 1) 准备标签映射等元数据（也会写出 artifacts/processed/...）
     metadata = prepare_dataset_artifacts(config)
 
     # 2) 初始化模型与数据
@@ -252,21 +271,24 @@ def train(config_path: str = "configs/base.yaml") -> dict:
     device = get_device()
     model.to(device)
 
-    # 3) 优化器 + 线性 warmup 学习率调度
+    # 3) 优化器 + 线性 warmup 学习率调度（BERT 微调常用组合）
     optimizer = AdamW(
         model.parameters(),
         lr=config.training.learning_rate,
-        weight_decay=config.training.weight_decay,
+        weight_decay=config.training.weight_decay,  # L2 正则，缓解过拟合
     )
+    # 总更新步数 ≈ 每个 epoch 的 batch 数 × epoch 数
     total_training_steps = len(train_loader) * config.training.num_epochs
     warmup_steps = int(total_training_steps * config.training.warmup_ratio)
     scheduler = get_linear_schedule_with_warmup(
         optimizer=optimizer,
-        num_warmup_steps=warmup_steps,
-        num_training_steps=total_training_steps,
+        num_warmup_steps=warmup_steps,       # 前若干步线性升到峰值 lr
+        num_training_steps=total_training_steps,  # 之后线性降到接近 0
     )
 
+    # 混合精度仅在「配置开启 + CUDA」时真正生效
     use_fp16 = config.training.use_fp16 and device.type == "cuda"
+    # GradScaler：反向时放大 loss，减轻 fp16 梯度下溢；再在 step 前缩回
     scaler = torch.cuda.amp.GradScaler(enabled=use_fp16)
 
     # 按全局 step（batch）记录，便于 NLP 少 epoch 场景画细粒度曲线
@@ -274,11 +296,11 @@ def train(config_path: str = "configs/base.yaml") -> dict:
     global_step = 0
     best_val_f1 = -1.0
     best_epoch = 0
-    patience_counter = 0
+    patience_counter = 0  # 验证指标连续未提升的轮数
 
     # 4) 训练循环
     for epoch in range(1, config.training.num_epochs + 1):
-        model.train()
+        model.train()  # 打开 dropout 等训练态行为
         running_loss = 0.0
         running_correct = 0
         running_total = 0
@@ -287,19 +309,24 @@ def train(config_path: str = "configs/base.yaml") -> dict:
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch}/{config.training.num_epochs}")
         for batch in progress_bar:
             batch = move_batch_to_device(batch, device)
-            optimizer.zero_grad()
+            optimizer.zero_grad()  # 清掉上一步残留梯度
 
+            # autocast：前向在 fp16 下更快；关闭时等价于普通 float32 前向
             with torch.cuda.amp.autocast(enabled=use_fp16):
+                # batch 里通常含 input_ids / attention_mask / labels（可能还有 token_type_ids）
                 outputs = model(**batch)
-                loss = outputs.loss
+                loss = outputs.loss  # CrossEntropy，由 labels 自动计算
 
+            # 缩放后反向；再 unscale，才能用真实梯度做裁剪
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
+            # 梯度裁剪：限制梯度范数，缓解偶发爆炸
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.training.gradient_clip_norm)
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
+            scaler.step(optimizer)   # 若某步梯度有 inf/nan，scaler 会跳过更新
+            scaler.update()          # 动态调整缩放系数
+            scheduler.step()         # 每个 batch 更新一次学习率
 
+            # ---- 当前 batch 的训练监控指标 ----
             predictions = outputs.logits.argmax(dim=-1)
             batch_size = batch["labels"].size(0)
             batch_correct = (predictions == batch["labels"]).sum().item()
@@ -311,7 +338,7 @@ def train(config_path: str = "configs/base.yaml") -> dict:
             batch_in_epoch += 1
             global_step += 1
 
-            # 每个 batch 记一行；验证指标仅在 epoch 结束时填到最后一行
+            # 每个 batch 记一行；验证指标先留空，epoch 结束再填到最后一行
             step_history_rows.append(
                 {
                     "step": global_step,
@@ -325,6 +352,7 @@ def train(config_path: str = "configs/base.yaml") -> dict:
                 }
             )
 
+            # 进度条显示的是「本 epoch 到目前为止」的平均 loss / acc
             progress_bar.set_postfix(
                 loss=f"{running_loss / batch_in_epoch:.4f}",
                 acc=f"{running_correct / max(running_total, 1):.4f}",
@@ -335,12 +363,14 @@ def train(config_path: str = "configs/base.yaml") -> dict:
         train_acc = running_correct / max(running_total, 1)
         val_metrics = evaluate_model(model, val_loader, device, metadata["label_names"])
 
-        # 把本轮验证结果挂到当前全局 step 对应的日志行上
+        # 把本轮验证结果挂到「当前全局 step」那一行，画图时 val 点会落在 epoch 末
         step_history_rows[-1]["val_loss"] = round(val_metrics["loss"], 6)
         step_history_rows[-1]["val_accuracy"] = round(val_metrics["accuracy"], 6)
         step_history_rows[-1]["val_f1_macro"] = round(val_metrics["f1_macro"], 6)
+        # 每轮覆盖写盘：训练中途被打断也能保留已有曲线数据
         save_csv(step_history_rows, config.paths.logs_dir / "train_history.csv")
 
+        # last：永远保存「最新一轮」；即使后面变差也能回溯
         save_checkpoint(
             model,
             tokenizer,
@@ -348,11 +378,11 @@ def train(config_path: str = "configs/base.yaml") -> dict:
             {"saved_from_epoch": epoch, "type": "last"},
         )
 
-        # 以验证集 macro-F1 选模并驱动早停
+        # 以验证集 macro-F1 选模：类别不均衡时比单纯 accuracy 更稳
         if val_metrics["f1_macro"] > best_val_f1:
             best_val_f1 = val_metrics["f1_macro"]
             best_epoch = epoch
-            patience_counter = 0
+            patience_counter = 0  # 有提升就清零
             save_checkpoint(
                 model,
                 tokenizer,
@@ -369,11 +399,12 @@ def train(config_path: str = "configs/base.yaml") -> dict:
             f"val_loss={val_metrics['loss']:.4f}, val_f1={val_metrics['f1_macro']:.4f}"
         )
 
+        # 早停：连续 patience 轮验证集没提升就结束，避免过拟合空转
         if patience_counter >= config.training.patience:
             print(f"验证集指标连续 {config.training.patience} 轮未提升，提前停止训练。")
             break
 
-    # 6) 绘制按 step 的训练曲线，并用 best 模型评估测试集
+    # 6) 绘制按 step 的训练曲线，并用 best（不是 last）评估测试集
     history_csv = config.paths.logs_dir / "train_history.csv"
     curve_path = plot_train_history(
         history_csv_path=history_csv,

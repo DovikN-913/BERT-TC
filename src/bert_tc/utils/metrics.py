@@ -35,17 +35,17 @@ def compute_classification_metrics(
     precision, recall, f1, _ = precision_recall_fscore_support(
         labels,
         predictions,
-        average="macro",
+        average="macro",  # 各类别等权平均；类别不均衡时比 micro / 整体 accuracy 更公平
         zero_division=0,
     )
     report = classification_report(
         labels,
         predictions,
         target_names=label_names,
-        output_dict=True,
+        output_dict=True,  # 返回 dict，方便写 JSON
         zero_division=0,
     )
-    # tolist() 便于后续 json.dump 序列化
+    # tolist() 便于后续 json.dump 序列化（numpy 数组不能直接 dump）
     matrix = confusion_matrix(labels, predictions).tolist()
 
     return {

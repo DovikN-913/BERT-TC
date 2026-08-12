@@ -45,6 +45,7 @@ BERT-TC/
 ├─ data/ChnSentiCorp/           # 原始数据集
 ├─ models/                      # 本地预训练模型
 ├─ docs/
+│  ├─ execution_flow.md          # 执行流程（从零跑通）
 │  └─ finetune_other_datasets.md # 换数据集 / 多分类微调指南
 └─ requirements.txt
 ```
@@ -167,4 +168,5 @@ http://127.0.0.1:8000
 
 优先阅读 `scripts/` 下的脚本理解完整流程；`src/bert_tc/` 仅提供配置与工具函数。
 
-换数据集或做多分类微调，请看：[docs/finetune_other_datasets.md](docs/finetune_other_datasets.md)。
+- 执行流程（命令顺序与产物）：[docs/execution_flow.md](docs/execution_flow.md)
+- 换数据集或做多分类微调：[docs/finetune_other_datasets.md](docs/finetune_other_datasets.md)
