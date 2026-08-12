@@ -1,0 +1,15 @@
+# BERT-TC 运行依赖
+# 安装：pip install -r requirements.txt
+
+torch                 # 深度学习框架
+transformers          # HuggingFace 模型 / 分词器
+datasets              # 数据集加载（load_from_disk 等）
+numpy                 # 数值计算与随机种子
+scikit-learn          # 分类评估指标
+PyYAML                # 读取 configs/*.yaml
+fastapi               # HTTP API 服务
+uvicorn               # ASGI 服务器，启动 FastAPI
+pydantic              # 配置与请求体校验
+tqdm                  # 训练进度条
+safetensors           # 安全高效的权重存储格式
+matplotlib            # 混淆矩阵 / 训练曲线可视化

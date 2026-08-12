@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.idea/
+
+artifacts/checkpoints/
+artifacts/logs/
+artifacts/reports/
+artifacts/processed/
+**/models/models/

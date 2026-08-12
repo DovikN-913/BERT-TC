@@ -1,0 +1,59 @@
+# =============================================================================
+# BERT-TC 默认配置文件
+# 修改本文件即可调整数据路径、训练超参与服务启动参数，无需改代码。
+# =============================================================================
+
+# 项目名称（健康检查等接口会回显）
+project_name: bert-tc
+
+# 全局随机种子，保证数据打乱 / 初始化尽量可复现
+seed: 42
+
+# -----------------------------------------------------------------------------
+# 路径配置（相对路径均相对于项目根目录 BERT-TC/）
+# -----------------------------------------------------------------------------
+paths:
+  # 原始 HuggingFace datasets 磁盘格式数据
+  raw_data_dir: data/ChnSentiCorp
+  # 本地预训练中文 BERT
+  pretrained_model_dir: models/models/google-bert--bert-base-chinese
+  # 数据处理产物（label2id / metadata 等）
+  processed_dir: artifacts/processed
+  # 微调后模型 checkpoint（best / last）
+  checkpoints_dir: artifacts/checkpoints
+  # 评估报告与训练摘要
+  reports_dir: artifacts/reports
+  # 训练曲线日志
+  logs_dir: artifacts/logs
+
+# -----------------------------------------------------------------------------
+# 数据相关
+# -----------------------------------------------------------------------------
+data:
+  dataset_name: ChnSentiCorp   # 产物子目录名
+  text_column: text            # 文本列名
+  label_column: label          # 标签列名
+  max_length: 256              # 分词截断长度（越大越慢、显存越高）
+
+# -----------------------------------------------------------------------------
+# 训练超参数
+# -----------------------------------------------------------------------------
+training:
+  batch_size: 16               # 训练 batch
+  eval_batch_size: 32          # 验证 / 测试 batch
+  learning_rate: 2.0e-5        # AdamW 学习率
+  weight_decay: 0.01           # 权重衰减
+  num_epochs: 3                # 最大 epoch（可被早停提前结束）
+  warmup_ratio: 0.1            # 线性预热占总步数比例
+  gradient_clip_norm: 1.0      # 梯度裁剪
+  patience: 2                  # 验证集 macro-F1 连续不提升则早停
+  num_workers: 0               # DataLoader 进程数（Windows 建议 0）
+  use_fp16: false              # CUDA 混合精度开关
+
+# -----------------------------------------------------------------------------
+# 推理服务
+# -----------------------------------------------------------------------------
+serving:
+  host: 127.0.0.1              # 监听地址
+  port: 8000                   # 监听端口
+  checkpoint_name: best        # 默认加载的 checkpoint 名称

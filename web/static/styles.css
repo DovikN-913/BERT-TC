@@ -1,0 +1,94 @@
+/* 页面整体：浅色背景 + 居中卡片布局 */
+body {
+  margin: 0;
+  font-family: "Microsoft YaHei", Arial, sans-serif;
+  background: #f3f6fb;
+  color: #1f2937;
+}
+
+.container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* 主内容卡片 */
+.card {
+  width: 100%;
+  max-width: 760px;
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 32px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+}
+
+h1,
+h2 {
+  margin-top: 0;
+}
+
+.subtitle {
+  color: #4b5563;
+  margin-bottom: 24px;
+}
+
+.label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+/* 文本输入框 */
+textarea {
+  width: 100%;
+  min-height: 180px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  padding: 14px;
+  font-size: 15px;
+  box-sizing: border-box;
+}
+
+/* 预测按钮 */
+button {
+  margin-top: 16px;
+  border: 0;
+  border-radius: 10px;
+  padding: 12px 18px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #1d4ed8;
+}
+
+/* 状态文案区域（保留高度避免布局跳动） */
+.status {
+  margin-top: 16px;
+  min-height: 24px;
+  color: #374151;
+}
+
+/* 结果展示区 */
+.result {
+  margin-top: 24px;
+  padding: 20px;
+  border-radius: 12px;
+  background: #eff6ff;
+}
+
+/* 初始隐藏结果卡片 */
+.hidden {
+  display: none;
+}
+
+#probability-list {
+  margin-top: 12px;
+  padding-left: 20px;
+}

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BERT 中文文本分类演示</title>
+  <!-- 静态资源由 FastAPI 挂载到 /static -->
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <section class="card">
+      <h1>BERT 中文文本分类演示</h1>
+      <p class="subtitle">输入一段中文文本，体验已经完成微调的情感分类模型。</p>
+
+      <!-- 用户输入区 -->
+      <label for="text-input" class="label">待预测文本</label>
+      <textarea id="text-input" placeholder="例如：这家酒店位置很好，服务也很贴心。"></textarea>
+
+      <button id="predict-btn">开始预测</button>
+
+      <!-- 状态提示：空输入 / 请求中 / 错误信息 -->
+      <div id="status" class="status"></div>
+
+      <!-- 预测结果区：默认隐藏，成功后由 JS 显示 -->
+      <section id="result-card" class="result hidden">
+        <h2>预测结果</h2>
+        <p><strong>标签：</strong><span id="label"></span></p>
+        <p><strong>置信度：</strong><span id="confidence"></span></p>
+        <div>
+          <strong>各类别概率：</strong>
+          <ul id="probability-list"></ul>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
